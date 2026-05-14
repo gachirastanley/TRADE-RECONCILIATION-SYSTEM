@@ -2,5 +2,5 @@ streamlit
 pandas
 openpyxl
 camelot-py[cv]
-opencv-python
+opencv-python-headless
 ghostscript
