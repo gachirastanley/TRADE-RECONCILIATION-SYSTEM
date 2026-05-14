@@ -1,5 +1,6 @@
 streamlit
 pandas
-camelot
-os
-tempfile
+openpyxl
+camelot-py[cv]
+opencv-python
+ghostscript
