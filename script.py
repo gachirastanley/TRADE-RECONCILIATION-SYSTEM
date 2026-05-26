@@ -244,6 +244,17 @@ def cdc_receipting_ui():
 # =====================================================
 # MATCH LOGIC  (called once, results saved to state)
 # =====================================================
+def take_before_comma(val):
+    if pd.isna(val):
+        return 0.0
+    val_str = str(val).strip()
+
+    if "," in val_str:
+        val_str = val_str.split(",")[0]
+
+    return pd.to_numeric(val_str.replace(",", ""), errors="coerce")
+
+
 def _run_cdc_match():
     cdc = st.session_state.cdc_df.copy()
     sh = st.session_state.sh_df.copy()
@@ -255,38 +266,74 @@ def _run_cdc_match():
     cdc_sec = safe_find_col(cdc, ["counter"])
     sh_sec = safe_find_col(sh, ["security"])
 
+    # ✅ NEW: deal value columns
+    cdc_deal = get_col_keyword(cdc, ["deal value"])
+    sh_deal = get_col_keyword(sh, ["gross proceeds"])
+
     if None in (cdc_type, cdc_qty, sh_type, sh_qty, cdc_sec, sh_sec):
         st.error("Could not detect required columns (type / qty / security).")
         return
 
-    # Normalise
+    # ----------------------------
+    # ✅ NORMALISE
+    # ----------------------------
     cdc[cdc_qty] = pd.to_numeric(cdc[cdc_qty], errors="coerce").fillna(0)
     sh[sh_qty] = pd.to_numeric(sh[sh_qty], errors="coerce").fillna(0)
+
+    # ✅ CLEAN deal values (FIRST BEFORE COMMA)
+    if cdc_deal:
+        cdc[cdc_deal] = cdc[cdc_deal].apply(take_before_comma).fillna(0)
+
+    if sh_deal:
+        sh[sh_deal] = sh[sh_deal].apply(take_before_comma).fillna(0)
+
     cdc[cdc_type] = cdc[cdc_type].astype(str).str.upper()
-    sh[sh_type] = sh[sh_type].astype(str).str.upper().replace({"BUY": "PURCHASE", "SELL": "SALE"})
-    cdc["_MATCH_"] = cdc[cdc_type].map({"BUY": "PURCHASE", "SELL": "SALE"})
+    sh[sh_type] = sh[sh_type].astype(str).str.upper().replace({
+        "BUY": "PURCHASE",
+        "SELL": "SALE"
+    })
+
+    cdc["_MATCH_"] = cdc[cdc_type].map({
+        "BUY": "PURCHASE",
+        "SELL": "SALE"
+    })
 
     first_col = cdc.columns[0]
 
-    # Save total rows before removing them
+    # ----------------------------
+    # ✅ SAVE TOTAL ROWS
+    # ----------------------------
     cdc_buy_total = cdc[cdc[first_col].astype(str).str.contains("BUY TOTAL", na=False)]
     cdc_sell_total = cdc[cdc[first_col].astype(str).str.contains("SELL TOTAL", na=False)]
 
     cdc_clean = cdc[~cdc[first_col].astype(str).str.contains("TOTAL", na=False)]
 
-    # Build match keys
+    # ----------------------------
+    # ✅ BUILD MATCH KEY (NOW 4 FIELDS)
+    # ----------------------------
     keys = set(zip(
         cdc_clean[cdc_sec].astype(str).str.upper().str[:1],
         cdc_clean[cdc_qty],
         cdc_clean["_MATCH_"],
+        cdc_clean[cdc_deal] if cdc_deal else [0]*len(cdc_clean)
     ))
 
+    # ----------------------------
+    # ✅ MATCH SHARESTOCK
+    # ----------------------------
     matched = sh[sh.apply(
-        lambda r: (str(r[sh_sec]).upper()[:1], r[sh_qty], r[sh_type]) in keys,
+        lambda r: (
+            str(r[sh_sec]).upper()[:1],
+            r[sh_qty],
+            r[sh_type],
+            r[sh_deal] if sh_deal else 0
+        ) in keys,
         axis=1,
     )]
 
-    # Add Sharestock totals
+    # ----------------------------
+    # ✅ TOTALS
+    # ----------------------------
     def add_total(df, label):
         total = {
             col: (df[col].sum() if pd.api.types.is_numeric_dtype(df[col]) else "")
@@ -298,7 +345,9 @@ def _run_cdc_match():
     purchase_df = add_total(matched[matched[sh_type] == "PURCHASE"].copy(), "PURCHASE TOTAL")
     sale_df = add_total(matched[matched[sh_type] == "SALE"].copy(), "SALE TOTAL")
 
-    # Column mapping: CDC col keyword → Sharestock col keywords
+    # ----------------------------
+    # ✅ COLUMN MAP
+    # ----------------------------
     column_map = {
         "quantity":       ["qty"],
         "deal value":     ["gross proceeds"],
@@ -315,12 +364,15 @@ def _run_cdc_match():
     def build_cdc_row(source_df, total_row, label):
         row = {col: "" for col in source_df.columns}
         row[sh_type] = label
+
         for cdc_key, sh_keys in column_map.items():
             cdc_col = get_col_keyword(cdc, [cdc_key])
             sh_col = get_col_keyword(source_df, sh_keys)
+
             if cdc_col and sh_col:
                 val = pd.to_numeric(total_row[cdc_col], errors="coerce")
                 row[sh_col] = 0.0 if pd.isna(val).all() else float(val.fillna(0).sum())
+
         return pd.DataFrame([row])
 
     def insert_after(df, after_label, new_row):
@@ -330,21 +382,36 @@ def _run_cdc_match():
             return pd.concat([df.iloc[:idx], new_row, df.iloc[idx:]], ignore_index=True)
         return pd.concat([df, new_row], ignore_index=True)
 
+    # ----------------------------
+    # ✅ INSERT CDC TOTALS
+    # ----------------------------
     if not cdc_buy_total.empty:
-        purchase_df = insert_after(purchase_df, "PURCHASE TOTAL",
-                                   build_cdc_row(purchase_df, cdc_buy_total.iloc[0:1], "CDC PURCHASE TOTAL"))
-    if not cdc_sell_total.empty:
-        sale_df = insert_after(sale_df, "SALE TOTAL",
-                               build_cdc_row(sale_df, cdc_sell_total.iloc[0:1], "CDC SALE TOTAL"))
+        purchase_df = insert_after(
+            purchase_df,
+            "PURCHASE TOTAL",
+            build_cdc_row(purchase_df, cdc_buy_total.iloc[0:1], "CDC PURCHASE TOTAL")
+        )
 
-    # Add variance row
+    if not cdc_sell_total.empty:
+        sale_df = insert_after(
+            sale_df,
+            "SALE TOTAL",
+            build_cdc_row(sale_df, cdc_sell_total.iloc[0:1], "CDC SALE TOTAL")
+        )
+
+    # ----------------------------
+    # ✅ VARIANCE
+    # ----------------------------
     def add_variance(df, total_label, cdc_label):
         t_rows = df[df[sh_type] == total_label]
         c_rows = df[df[sh_type] == cdc_label]
+
         if t_rows.empty or c_rows.empty:
             return df
+
         t = t_rows.iloc[0]
         c = c_rows.iloc[0]
+
         row = {}
         for col in df.columns:
             if col == sh_type:
@@ -355,14 +422,19 @@ def _run_cdc_match():
                 row[col] = (0 if pd.isna(tv) else tv) - (0 if pd.isna(cv) else cv)
             else:
                 row[col] = ""
+
         return insert_after(df, cdc_label, pd.DataFrame([row]))
 
     purchase_df = add_variance(purchase_df, "PURCHASE TOTAL", "CDC PURCHASE TOTAL")
     sale_df = add_variance(sale_df, "SALE TOTAL", "CDC SALE TOTAL")
 
+    # ----------------------------
+    # ✅ SAVE
+    # ----------------------------
     st.session_state.purchase_df = purchase_df
     st.session_state.sale_df = sale_df
     st.session_state.cdc_matched = True
+
     st.rerun()
 
 
