@@ -464,9 +464,7 @@ def _show_final_summary():
     total_purchases = extract_levies(p, p_type, "PURCHASE TOTAL", levy_kw) if p_type else 0.0
     total_sales = extract_levies(s, s_type, "SALE TOTAL", levy_kw) if s_type else 0.0
 
-    zse_levy = (
-        (extract_levy(p, p_type, "PURCHASE TOTAL", "zse") if p_type else 0.0) +
-        (extract_levy(s, s_type, "SALE TOTAL", "zse") if s_type else 0.0)
+  
     )
     ipl_levy = (
         (extract_levy(p, p_type, "PURCHASE TOTAL", "investor") if p_type else 0.0) +
@@ -478,7 +476,7 @@ def _show_final_summary():
     )
 
     total_p_and_s = round(total_purchases + total_sales, 2)
-    total_to_receive = round(total_p_and_s - zse_levy - ipl_levy - sec_levy, 2)
+    total_to_receive = round(total_p_and_s - ipl_levy - sec_levy, 2)
     balance_from_bank = round( total_to_receive-bank_amount- bank_amount , 2)
 
     # Post-settlement total from CDC BUY/SELL TOTAL rows
@@ -495,7 +493,7 @@ def _show_final_summary():
             post_settlement_total = round(
                 (0 if pd.isna(b) else float(b)) +
                 (0 if pd.isna(sv) else float(sv)) -
-                zse_levy - ipl_levy - sec_levy,
+                ipl_levy - sec_levy,
                 2,
             )
 
@@ -520,7 +518,7 @@ def _show_final_summary():
         ["Total Sales",                  total_sales,        "", "", "", "", "", "", ""],
         ["Total Purchases and Sales",    total_p_and_s,      "", "", "", "", "", "", ""],
         ["",                             "",                 "", "", "", "", "", "", ""],
-        ["ZSE Levy Remitted Directly",   zse_levy,           "", "", "", "", "", "", ""],
+      
         ["IPL Levy Remitted Directly",   ipl_levy,           "", "", "", "", "", "", ""],
         ["SEC Levy",                     sec_levy,           "", "", "", "", "", "", ""],
         [
