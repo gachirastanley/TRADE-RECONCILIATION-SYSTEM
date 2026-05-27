@@ -479,7 +479,7 @@ def _show_final_summary():
 
     total_p_and_s = round(total_purchases + total_sales, 2)
     total_to_receive = round(total_p_and_s - zse_levy - ipl_levy - sec_levy, 2)
-    balance_from_bank = round( total_to_receive-bank_amount , 2)
+    balance_from_bank = round( total_to_receive-bank_amount- bank_amount , 2)
 
     # Post-settlement total from CDC BUY/SELL TOTAL rows
     post_settlement_total = 0.0
