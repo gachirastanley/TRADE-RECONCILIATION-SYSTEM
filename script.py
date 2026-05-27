@@ -464,7 +464,9 @@ def _show_final_summary():
     total_purchases = extract_levies(p, p_type, "PURCHASE TOTAL", levy_kw) if p_type else 0.0
     total_sales = extract_levies(s, s_type, "SALE TOTAL", levy_kw) if s_type else 0.0
 
-  
+    zse_levy = (
+        (extract_levy(p, p_type, "PURCHASE TOTAL", "zse") if p_type else 0.0) +
+        (extract_levy(s, s_type, "SALE TOTAL", "zse") if s_type else 0.0)
     )
     ipl_levy = (
         (extract_levy(p, p_type, "PURCHASE TOTAL", "investor") if p_type else 0.0) +
@@ -477,7 +479,7 @@ def _show_final_summary():
 
     total_p_and_s = round(total_purchases + total_sales, 2)
     total_to_receive = round(total_p_and_s - ipl_levy - sec_levy, 2)
-    balance_from_bank = round( total_to_receive-bank_amount- bank_amount , 2)
+    balance_from_bank = round( total_to_receive-bank_amount , 2)
 
     # Post-settlement total from CDC BUY/SELL TOTAL rows
     post_settlement_total = 0.0
@@ -493,7 +495,7 @@ def _show_final_summary():
             post_settlement_total = round(
                 (0 if pd.isna(b) else float(b)) +
                 (0 if pd.isna(sv) else float(sv)) -
-                ipl_levy - sec_levy,
+                zse_levy - ipl_levy - sec_levy,
                 2,
             )
 
@@ -509,8 +511,9 @@ def _show_final_summary():
                 val = pd.to_numeric(vr.iloc[0][cgt_col], errors="coerce")
                 cgt_variance = 0.0 if pd.isna(val) else round(float(val), 2)
 
-    verify_value = round(bank_amount + cgt_variance - post_settlement_total, 2)
     diff_bank_post = round(balance_from_bank - cgt_variance - csd_reallocation, 2)
+
+    verify_value = round(bank_amount + cgt_variance +csd_reallocation+ diff_bank_post - post_settlement_total, 2)
 
     # Build display table
     summary_df = pd.DataFrame([
@@ -518,7 +521,7 @@ def _show_final_summary():
         ["Total Sales",                  total_sales,        "", "", "", "", "", "", ""],
         ["Total Purchases and Sales",    total_p_and_s,      "", "", "", "", "", "", ""],
         ["",                             "",                 "", "", "", "", "", "", ""],
-      
+
         ["IPL Levy Remitted Directly",   ipl_levy,           "", "", "", "", "", "", ""],
         ["SEC Levy",                     sec_levy,           "", "", "", "", "", "", ""],
         [
@@ -548,7 +551,7 @@ def _show_final_summary():
         ["", "", "", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", "", ""],
 
-        ["Journals to be Posted in Sybrin", "", "", ""],
+        ["Journals to be Posted in Sharestock", "", "", ""],
         ["LEVIES REMITTED DIRECTLY BY DEPOSITORY", "", "", ""],
         ["Narration", "", "DR", "CR"],
         ["CDC Bank charges", "BANK CHARGES", diff_bank_post, "", "", "", "", "", ""],
