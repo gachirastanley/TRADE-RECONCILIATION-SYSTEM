@@ -69,7 +69,6 @@ def extract_levies(df, type_col, label, keywords):
 def cdc_receipting_ui():
     st.subheader("Start CDC Reconciliation")
 
-    # ---------- Step 1: Upload & Extract PDF ----------
     pdf = st.file_uploader("Upload Consolidated Trades PDF", type=["pdf"], key="cdc")
 
     if pdf and st.button("Extract & Sort CDC"):
@@ -78,99 +77,182 @@ def cdc_receipting_ui():
             path = tmp.name
 
         try:
-            tables = camelot.read_pdf(path, pages="all", flavor="stream", edge_tol=500, strip_text="\n")
+            tables = camelot.read_pdf(path, pages="all", flavor="stream", edge_tol=500)
+
             if tables.n == 0:
                 st.error("No tables found in PDF.")
                 return
 
             df = pd.concat([t.df for t in tables], ignore_index=True)
 
-            # Clean
-            df = df.iloc[3:, 1:]
+            # ===============================
+            # STEP 1: REMOVE FIRST 3 ROWS
+            # ===============================
+            df = df.iloc[3:].reset_index(drop=True)
+
+            # ===============================
+            # STEP 2: SET HEADER
+            # ===============================
             df.columns = df.iloc[0].astype(str).str.strip()
-            df = df.iloc[1:]
+            df = df.iloc[1:].reset_index(drop=True)
 
-            if "T+2" in df.columns:
-                df.drop(columns=["T+2"], inplace=True)
+            # ✅ Normalize "None"
+            df = df.replace("None", "")
 
-            if "ZSE Levy" in df.columns:
-                df["ZSE Levy"] = df["ZSE Levy"].shift(-1)
+            # ===============================
+            # STEP 3: SHIFT ZSE LEVY
+            # ===============================
+            for col in df.columns:
+                if "zse levy" in col.lower():
+                    df[col] = df[col].astype(str).str.replace(",", "").str.strip()
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                    df[col] = df[col].shift(-1).fillna(0)
+                    break
 
+            # ===============================
+            # STEP 4: CLEAN FIRST COLUMN
+            # ===============================
             first_col = df.columns[0]
-            second_col = df.columns[1]
             df[first_col] = df[first_col].astype(str).str.strip()
-            df[second_col] = df[second_col].astype(str).str.strip()
 
             df = df[
+                (df[first_col].notna()) &
                 (df[first_col] != "") &
-                (df[second_col] != "") &
-                (~df[first_col].str.upper().eq("TRADE DATE"))
-            ].reset_index(drop=True)
-            # ✅ REMOVE ROWS WHERE INVESTOR NAME HAS NUMBERS
-            investor_col = safe_find_col(df, ["investor name", "client", "counter"])
+                (~df[first_col].str.lower().isin([
+                    "deal number", "broker name", "sell deals"
+                ]))
+            ]
 
-            if investor_col:
+            # ✅ REMOVE rows with "broker code" ANYWHERE
+            df = df[
+                ~df.apply(
+                    lambda row: row.astype(str).str.lower().str.contains("broker code").any(),
+                    axis=1
+                )
+            ]
+
+            # ===============================
+            # STEP 5: DROP COLUMNS
+            # ===============================
+            drop_cols = [
+                col for col in df.columns
+                if col.lower().strip() in ["deal number", "t+2"]
+            ]
+            df.drop(columns=drop_cols, inplace=True, errors="ignore")
+
+            # ===============================
+            # STEP 6: CLEAN TRADE DATE
+            # ===============================
+            trade_date_col = safe_find_col(df, ["trade date"])
+            if trade_date_col:
+                df[trade_date_col] = df[trade_date_col].astype(str).str.strip()
                 df = df[
-                    ~df[investor_col]
-                    .astype(str)
-                    .str.contains(r"\d", regex=True)  # removes rows with ANY digit
-                ].reset_index(drop=True)
+                    (df[trade_date_col] != "") &
+                    (df[trade_date_col].str.lower() != "none")
+                ]
             else:
-                st.warning("Investor name column not found for numeric filtering.")
-            # Numeric columns from col 5 onward
-            for col in df.columns[5:]:
-                df[col] = pd.to_numeric(
-                    df[col].astype(str).str.replace(",", "", regex=False).str.strip(),
+                st.warning("Trade Date column not found")
+
+            # ===============================
+            # STEP 7: CLEAN QUANTITY
+            # ===============================
+            qty_col = safe_find_col(df, ["quantity"])
+            if qty_col:
+                df[qty_col] = pd.to_numeric(
+                    df[qty_col].astype(str).str.replace(",", "").str.strip(),
                     errors="coerce"
                 ).fillna(0)
 
-            # Classify BUY / SELL
+                df = df[df[qty_col] > 0]
+            else:
+                st.warning("Quantity column not found")
+
+            # ===============================
+            # STEP 8: NUMERIC CLEANING
+            # ===============================
+            for col in df.columns:
+                if col.lower() in [
+                    "trade date", "settlement date",
+                    "investor name", "investor code",
+                    "counter", "buy/sell"
+                ]:
+                    continue
+
+                df[col] = pd.to_numeric(
+                    df[col].astype(str).str.replace(",", "").str.strip(),
+                    errors="coerce"
+                )
+
+            df = df.reset_index(drop=True)
+
+            # ===============================
+            # STEP 9: BUY / SELL
+            # ===============================
             stamp_col = safe_find_col(df, ["stamp duty"])
             qty_col = safe_find_col(df, ["quantity"])
+
             if not stamp_col or not qty_col:
                 st.error("Required columns (Stamp Duty / Quantity) missing.")
                 return
 
             qty_idx = df.columns.get_loc(qty_col)
+
             bs_col = "Buy/Sell"
             df.insert(qty_idx + 1, bs_col, "")
+
             df.loc[df[stamp_col] > 0, bs_col] = "BUY"
             df.loc[df[stamp_col] == 0, bs_col] = "SELL"
 
             buy_df = df[df[stamp_col] > 0].copy()
             sell_df = df[df[stamp_col] == 0].copy()
 
+            # ===============================
+            # TOTAL ROW FUNCTION
+            # ===============================
             def make_total_row(data, label):
-                row = {c: (data[c].sum() if c != bs_col and df.columns.get_loc(c) >= qty_idx else "") for c in data.columns}
-                row[first_col] = label
+                row = {}
+                for c in data.columns:
+                    if pd.api.types.is_numeric_dtype(data[c]):
+                        row[c] = data[c].sum()
+                    else:
+                        row[c] = ""
+                row[data.columns[0]] = label
                 return pd.DataFrame([row])
 
+            # ===============================
+            # FINAL CDC TABLE
+            # ===============================
             cdc_df = pd.concat([
-                pd.concat([buy_df, make_total_row(buy_df, "BUY TOTAL")], ignore_index=True),
-                pd.concat([sell_df, make_total_row(sell_df, "SELL TOTAL")], ignore_index=True),
+                pd.concat([buy_df, make_total_row(buy_df, "BUY TOTAL")]),
+                pd.concat([sell_df, make_total_row(sell_df, "SELL TOTAL")])
             ], ignore_index=True)
 
-            # Persist to session state and rerun so display is clean
+            # ===============================
+            # STORE IN SESSION
+            # ===============================
             st.session_state.cdc_df = cdc_df
             st.session_state.cdc_sorted = True
-            st.session_state.cdc_matched = False
-            st.session_state.show_final_summary = False
+
+            st.success("CDC Processing Complete ✅")
             st.rerun()
 
         except Exception as e:
             st.error(f"Error extracting tables: {e}")
+
         finally:
             if os.path.exists(path):
                 os.remove(path)
 
-    # ---------- Step 2: Show CDC table ----------
+    # ===============================
+    # DISPLAY
+    # ===============================
+       # ---------- Step 2: Show CDC table ----------
     if not st.session_state.get("cdc_sorted", False):
         return
 
     st.dataframe(st.session_state.cdc_df, use_container_width=True)
     st.divider()
-
-    # ---------- Step 3: Upload Sharestock ----------
+         # ---------- Step 3: Upload Sharestock ----------
     st.subheader("Upload Sharestock File")
     sh_file = st.file_uploader("Upload Sharestock Excel File", type=["xlsx", "xls"], key="sh")
 
@@ -255,10 +337,14 @@ def take_before_comma(val):
     return pd.to_numeric(val_str.replace(",", ""), errors="coerce")
 
 
+
 def _run_cdc_match():
     cdc = st.session_state.cdc_df.copy()
     sh = st.session_state.sh_df.copy()
 
+    # ----------------------------
+    # ✅ FIND COLUMNS
+    # ----------------------------
     cdc_type = safe_find_col(cdc, ["buy/sell", "type"])
     cdc_qty = safe_find_col(cdc, ["quantity", "qty"])
     sh_type = safe_find_col(sh, ["buy/sell", "type"])
@@ -266,12 +352,16 @@ def _run_cdc_match():
     cdc_sec = safe_find_col(cdc, ["counter"])
     sh_sec = safe_find_col(sh, ["security"])
 
+    # ✅ NEW: investor/client columns
+    cdc_inv = safe_find_col(cdc, ["investor name", "client"])
+    sh_client = safe_find_col(sh, ["client"])
+
     # ✅ NEW: deal value columns
     cdc_deal = get_col_keyword(cdc, ["deal value"])
     sh_deal = get_col_keyword(sh, ["gross proceeds"])
 
-    if None in (cdc_type, cdc_qty, sh_type, sh_qty, cdc_sec, sh_sec):
-        st.error("Could not detect required columns (type / qty / security).")
+    if None in (cdc_type, cdc_qty, sh_type, sh_qty, cdc_sec, sh_sec, cdc_inv, sh_client):
+        st.error("Missing required columns.")
         return
 
     # ----------------------------
@@ -280,12 +370,11 @@ def _run_cdc_match():
     cdc[cdc_qty] = pd.to_numeric(cdc[cdc_qty], errors="coerce").fillna(0)
     sh[sh_qty] = pd.to_numeric(sh[sh_qty], errors="coerce").fillna(0)
 
-    # ✅ CLEAN deal values (FIRST BEFORE COMMA)
     if cdc_deal:
-        cdc[cdc_deal] = cdc[cdc_deal].apply(take_before_comma).fillna(0)
+        cdc[cdc_deal] = pd.to_numeric(cdc[cdc_deal], errors="coerce").fillna(0)
 
     if sh_deal:
-        sh[sh_deal] = sh[sh_deal].apply(take_before_comma).fillna(0)
+        sh[sh_deal] = pd.to_numeric(sh[sh_deal], errors="coerce").fillna(0)
 
     cdc[cdc_type] = cdc[cdc_type].astype(str).str.upper()
     sh[sh_type] = sh[sh_type].astype(str).str.upper().replace({
@@ -298,7 +387,14 @@ def _run_cdc_match():
         "SELL": "SALE"
     })
 
+    # ----------------------------
+    # ✅ NEW: FIRST LETTER MATCH (Investor ↔ Client)
+    # ----------------------------
+    cdc["_NAME_MATCH_"] = cdc[cdc_inv].astype(str).str.strip().str.upper().str[:1]
+    sh["_NAME_MATCH_"] = sh[sh_client].astype(str).str.strip().str.upper().str[:1]
+
     first_col = cdc.columns[0]
+
 
     # ----------------------------
     # ✅ SAVE TOTAL ROWS
