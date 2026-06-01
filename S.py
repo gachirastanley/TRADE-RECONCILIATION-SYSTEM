@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 from io import BytesIO
 
+
 from script import cdc_receipting_ui
 from login import login_user, register_user
 
@@ -161,6 +162,11 @@ def save_history(data):
 # =====================================================
 # UTILITY HELPERS
 # =====================================================
+# =====================================================
+# VOICE COMMAND FUNCTION
+# =====================================================
+
+
 def display_table_with_commas(df: pd.DataFrame, hide_index=False, hide_columns=False):
     styled = df.style.format(precision=2, thousands=",")
     styled = styled.apply(
@@ -292,6 +298,7 @@ if st.sidebar.button("History"):
     st.session_state.show_history = True
 
 
+
 # =====================================================
 # HISTORY PAGE
 # =====================================================
@@ -335,6 +342,7 @@ if st.session_state.show_history:
         st.rerun()
 
     st.stop()
+
 
 
 # =====================================================
@@ -475,7 +483,7 @@ if st.session_state.sorted:
             zse = st.session_state.zse_df.copy()
             sh = st.session_state.sh_df.copy()
 
-            zse_type = safe_find_col(zse, ["buy"])
+            zse_type = safe_find_col(zse, ["buy", "sell"])
             zse_sym = safe_find_col(zse, ["symbol", "security", "counter"])
             sh_type = safe_find_col(sh, ["type"])
             sh_sym = safe_find_col(sh, ["symbol", "security"])
@@ -924,5 +932,5 @@ if st.session_state.sorted:
                 }
 
 
-        save_history(history)
-        st.success("CDC report saved to history.")
+                save_history(history)
+                st.success("CDC report saved to history.")
