@@ -311,7 +311,7 @@ if st.sidebar.button("Extractor"):
 st.sidebar.divider()
 
 # push down
-st.sidebar.markdown("<br>" * 22, unsafe_allow_html=True)
+st.sidebar.markdown("<br>" * 20, unsafe_allow_html=True)
 
 if st.sidebar.button("Logout"):
     st.session_state.logged_in = False
