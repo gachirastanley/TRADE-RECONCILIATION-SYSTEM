@@ -5,8 +5,6 @@ import json
 from datetime import datetime
 from io import BytesIO
 from table import extractor_ui
-
-
 from script import cdc_receipting_ui
 from login import login_user, register_user
 
