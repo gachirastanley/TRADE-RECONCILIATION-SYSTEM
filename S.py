@@ -4,6 +4,7 @@ import os
 import json
 from datetime import datetime
 from io import BytesIO
+from table import extractor_ui
 
 
 from script import cdc_receipting_ui
@@ -27,32 +28,35 @@ os.makedirs(HISTORY_FOLDER, exist_ok=True)
 
 
 
+
 def apply_styles():
     st.markdown("""
     <style>
 
-    /* ✅ BACKGROUND + FAINT LOGO */
+    /* ✅ MAIN APP */
     .stApp {
         background-color: #ffffff;
         color: #0f172a;
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
+    /* ✅ TRANSPARENT BACKGROUND LOGO (WATERMARK) */
     .stApp::before {
         content: "";
         position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
+        top: 50%;
+        left: 50%;
+        width: 320px;
+        height: 320px;
 
-        background-image: url("https://tse4.mm.bing.net/th/id/OIP.m9NFEGw194N3YNNJq4OO8gAAAA?rs=1&pid=ImgDetMain&o=7&rm=3");
-        background-size: 220px;
+        transform: translate(-50%, -50%);
+
+        background-image: url("https://www.bing.com/images/search?view=detailV2&ccid=HNmmELo3&id=DF995DD7A7A4A627E50C471E75D8289B1865A824&thid=OIP.HNmmELo3S5IqybRU4NK7QgAAAA&mediaurl=https%3a%2f%2flookaside.fbsbx.com%2flookaside%2fcrawler%2fmedia%2f%3fmedia_id%3d100064357404728&cdnurl=https%3a%2f%2fth.bing.com%2fth%2fid%2fR.1cd9a610ba374b922ac9b454e0d2bb42%3frik%3dJKhlGJso2HUeRw%26pid%3dImgRaw%26r%3d0&exph=180&expw=180&q=FBC+Logo+Harare&FORM=IRPRST&ck=62955F392CAF1553BE6CAD732A0BF6CF&selectedIndex=94&itb=0");
+        background-size: contain;
         background-repeat: no-repeat;
-        background-position: center;
 
-        opacity: 0.9;  /* ✅ perfect faint */
-        z-index: -5;
+        opacity: 0.1;  /* ✅ much better watermark effect */
+        z-index: -10;
     }
 
     /* ✅ CONTENT CONTAINER */
@@ -65,22 +69,30 @@ def apply_styles():
     h1 { color: #0A2540; font-weight: 700; }
     h2, h3 { color: #102a43; font-weight: 600; }
 
-    /* ✅ BUTTONS */
+    /* ✅ ANIMATED BUTTONS */
     div.stButton > button {
-        background: #1d4ed8 !important;
-        color: white !important;
-        border-radius: 10px;
+        background: linear-gradient(135deg, #1d4ed8, #1e40af);
+        color: white;
+        border-radius: 12px;
         padding: 0.55rem 1.4rem;
         font-weight: 600;
         border: none;
+        cursor: pointer;
+
         box-shadow: 0 6px 16px rgba(29,78,216,0.35);
-        transition: all 0.2s ease;
+        transition: all 0.3s ease;
     }
 
+    /* Hover */
     div.stButton > button:hover {
-        background: #1e40af !important;
-        transform: translateY(-1px);
-        box-shadow: 0 10px 26px rgba(29,78,216,0.5);
+        transform: translateY(-3px) scale(1.03);
+        box-shadow: 0 12px 30px rgba(29,78,216,0.5);
+    }
+
+    /* Click */
+    div.stButton > button:active {
+        transform: scale(0.96);
+        box-shadow: 0 4px 10px rgba(29,78,216,0.3);
     }
 
     /* ✅ INPUT FIELDS */
@@ -232,7 +244,7 @@ st.session_state.setdefault("sh_df", None)
 st.session_state.setdefault("show_final_summary", False)
 st.session_state.setdefault("show_history", False)
 st.session_state.setdefault("reconciled", False)
-
+st.session_state.setdefault("show_extractor", False)
 
 # =====================================================
 # LOGIN / REGISTER PAGE
@@ -250,9 +262,9 @@ if not st.session_state.logged_in:
             width=300,
         )
 
+    mode = st.toggle("Switch to Register")
 
-
-    choice = st.sidebar.selectbox("Menu", ["Login", "Register"], key="login_menu")
+    choice = "Register" if mode else "Login"
 
 
 
@@ -289,15 +301,39 @@ if not st.session_state.logged_in:
 # =====================================================
 st.sidebar.success(f"Logged in as {st.session_state.username}")
 
+st.sidebar.divider()
+
+if st.sidebar.button("History"):
+    st.session_state.show_history = True
+
+if st.sidebar.button("Extractor"):
+    st.session_state.show_extractor = True
+    st.session_state.show_history = False
+
+st.sidebar.divider()
+
+# push down
+st.sidebar.markdown("<br>" * 22, unsafe_allow_html=True)
+
 if st.sidebar.button("Logout"):
     st.session_state.logged_in = False
     st.session_state.username = ""
     st.rerun()
 
-if st.sidebar.button("History"):
-    st.session_state.show_history = True
 
 
+# =====================================================
+# EXTRACTOR PAGE
+# =====================================================
+if st.session_state.show_extractor:
+
+    extractor_ui()  # 👈 call your function from table.py
+
+    if st.button("⬅ Back"):
+        st.session_state.show_extractor = False
+        st.rerun()
+
+    st.stop()
 
 # =====================================================
 # HISTORY PAGE
