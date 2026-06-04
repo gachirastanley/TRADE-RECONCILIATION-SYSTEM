@@ -51,11 +51,11 @@ def apply_styles():
 
         transform: translate(-50%, -50%);
 
-        background-image: url("https://www.bing.com/images/search?view=detailV2&ccid=HNmmELo3&id=DF995DD7A7A4A627E50C471E75D8289B1865A824&thid=OIP.HNmmELo3S5IqybRU4NK7QgAAAA&mediaurl=https%3a%2f%2flookaside.fbsbx.com%2flookaside%2fcrawler%2fmedia%2f%3fmedia_id%3d100064357404728&cdnurl=https%3a%2f%2fth.bing.com%2fth%2fid%2fR.1cd9a610ba374b922ac9b454e0d2bb42%3frik%3dJKhlGJso2HUeRw%26pid%3dImgRaw%26r%3d0&exph=180&expw=180&q=FBC+Logo+Harare&FORM=IRPRST&ck=62955F392CAF1553BE6CAD732A0BF6CF&selectedIndex=94&itb=0");
+        background-image: url("https://tse4.mm.bng.net/th/id/OIP.m9NFEGw194N3YNNJq4OO8gAAAA?rs=1&pid=ImgDetMain&o=7&rm=3");
         background-size: contain;
         background-repeat: no-repeat;
 
-        opacity: 0.1;  /* ✅ much better watermark effect */
+        opacity: 0.08;  /* ✅ much better watermark effect */
         z-index: -10;
     }
 
