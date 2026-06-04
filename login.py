@@ -1,10 +1,10 @@
-import streamlit as st
 import json
 import hashlib
 import os
+from datetime import datetime
 
 # =========================
-# ✅ FILE TO STORE USERS
+# ✅ FILE PATH
 # =========================
 USER_FILE = "users.json"
 
@@ -13,6 +13,7 @@ USER_FILE = "users.json"
 # ✅ HELPERS
 # =========================
 def load_users():
+    """Load users from JSON file"""
     if os.path.exists(USER_FILE):
         with open(USER_FILE, "r") as f:
             return json.load(f)
@@ -20,16 +21,27 @@ def load_users():
 
 
 def save_users(users):
+    """Save users to JSON file"""
     with open(USER_FILE, "w") as f:
-        json.dump(users, f)
-
-
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+        json.dump(users, f, indent=4)
 
 
 # =========================
-# ✅ AUTH FUNCTIONS
+# ✅ PASSWORD SECURITY
+# =========================
+def hash_password(password, salt=None):
+    """
+    Hash password with optional salt
+    """
+    if salt is None:
+        salt = os.urandom(16).hex()  # generate random salt
+
+    hashed = hashlib.sha256((password + salt).encode()).hexdigest()
+    return hashed, salt
+
+
+# =========================
+# ✅ REGISTER USER
 # =========================
 def register_user(username, password):
     users = load_users()
@@ -37,104 +49,65 @@ def register_user(username, password):
     if username in users:
         return False, "Username already exists"
 
-    users[username] = hash_password(password)
+    if len(password) < 4:
+        return False, "Password must be at least 4 characters"
+
+    hashed, salt = hash_password(password)
+
+    users[username] = {
+        "password": hashed,
+        "salt": salt,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+
     save_users(users)
 
     return True, "Registration successful"
 
 
+# =========================
+# ✅ LOGIN USER
+# =========================
 def login_user(username, password):
     users = load_users()
 
     if username not in users:
         return False
 
-    if users[username] == hash_password(password):
+    user = users[username]
+
+    # ✅ Handle incorrect/old format safely
+    if not isinstance(user, dict):
+        return False
+
+    stored_hash = user.get("password")
+    salt = user.get("salt")
+
+    if not stored_hash or not salt:
+        return False
+
+    hashed, _ = hash_password(password, salt)
+
+    return hashed == stored_hash
+
+
+
+# =========================
+# ✅ DELETE USER (OPTIONAL)
+# =========================
+def delete_user(username):
+    users = load_users()
+
+    if username in users:
+        del users[username]
+        save_users(users)
         return True
 
     return False
 
 
 # =========================
-# ✅ SESSION STATE INIT
+# ✅ GET ALL USERS (ADMIN)
 # =========================
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-
-if "username" not in st.session_state:
-    st.session_state.username = ""
-
-
-# =========================
-# ✅ UI
-# =========================
-st.title("🔐 Secure Login System")
-
-menu = ["Login", "Register"]
-choice = st.sidebar.selectbox("Menu", menu)
-
-
-# =========================
-# ✅ REGISTER
-# =========================
-if choice == "Register":
-
-    st.subheader("Create New Account")
-
-    new_user = st.text_input("Username")
-    new_pass = st.text_input("Password", type="password")
-
-    if st.button("Register"):
-
-        if new_user == "" or new_pass == "":
-            st.warning("Please fill all fields")
-
-        else:
-            success, message = register_user(new_user, new_pass)
-
-            if success:
-                st.success(message)
-            else:
-                st.error(message)
-
-
-# =========================
-# ✅ LOGIN
-# =========================
-elif choice == "Login":
-
-    st.subheader("Login to Continue")
-
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-
-    if st.button("Login"):
-
-        if login_user(username, password):
-            st.session_state.logged_in = True
-            st.session_state.username = username
-            st.success(f"Welcome {username} ✅")
-
-        else:
-            st.error("Invalid username or password")
-
-
-# =========================
-# ✅ LOGGED-IN AREA
-# =========================
-if st.session_state.logged_in:
-
-    st.sidebar.success(f"Logged in as {st.session_state.username}")
-
-    if st.sidebar.button("Logout"):
-        st.session_state.logged_in = False
-        st.session_state.username = ""
-        st.warning("Logged out successfully")
-
-    # 🔽 PUT YOUR MAIN APP HERE
-    st.subheader("✅ Access Granted")
-
-    st.write("This is your protected app area.")
-
-    # 👉 Example:
-    st.write("Place your CDC receipting UI here")
+def get_all_users():
+    return load_users()
