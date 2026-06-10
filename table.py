@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pdfplumber
 import pandas as pd
@@ -6,7 +5,6 @@ import re
 import io
 from docx import Document
 import os
-
 
 
 def extractor_ui():
@@ -17,8 +15,8 @@ def extractor_ui():
     # ✅ CLEAN ACCOUNT CODE
     def clean_code(code):
         code = code.replace(" ", "")
-        code = re.sub(r"R$", "", code)       # remove trailing R
-        code = re.sub(r"\d+$", "", code)     # remove trailing numbers
+        code = re.sub(r"R$", "", code)
+        code = re.sub(r"\d+$", "", code)
         return code.strip()
 
     # ✅ GROUPING KEY
@@ -34,6 +32,9 @@ def extractor_ui():
 
         st.info("Extracting...")
 
+        # ✅ Get file name without extension
+        base_name = os.path.splitext(uploaded_file.name)[0]
+
         selected_codes = {}
         share_codes = set()
 
@@ -43,10 +44,7 @@ def extractor_ui():
                     text = page.extract_text()
 
                     if text:
-
-                        # =========================
                         # ✅ ACCOUNT CODES
-                        # =========================
                         acc_matches = re.findall(
                             r"Unknown Account Code\s+([A-Z0-9\s]+)",
                             text
@@ -56,13 +54,10 @@ def extractor_ui():
 
                         for code in acc_matches:
                             key = get_group_key(code)
-
                             if key not in selected_codes:
                                 selected_codes[key] = code
 
-                        # =========================
                         # ✅ SHARE CODES
-                        # =========================
                         share_matches = re.findall(
                             r"Analysis Code\s+([A-Z0-9\.]+)",
                             text
@@ -70,38 +65,20 @@ def extractor_ui():
 
                         share_codes.update(share_matches)
 
-            # =========================
             # ✅ ACCOUNT RESULTS
-            # =========================
             final_account_codes = list(selected_codes.values())
-
-            df_accounts = pd.DataFrame({
-                "Account Code": final_account_codes
-            })
+            df_accounts = pd.DataFrame({"Account Code": final_account_codes})
 
             st.subheader("✅ Account Codes")
             st.dataframe(df_accounts, use_container_width=True)
 
-            # =========================
             # ✅ SHARE RESULTS
-            # =========================
-            df_shares = pd.DataFrame({
-                "Share Code": list(share_codes)
-            })
+            df_shares = pd.DataFrame({"Share Code": list(share_codes)})
 
             st.subheader("✅ Share Codes")
             st.dataframe(df_shares, use_container_width=True)
-            if uploaded_file is not None:
 
-    st.info("Extracting...")
-
-    # ✅ Get file name without extension
-    base_name = os.path.splitext(uploaded_file.name)[0]
-
-
-            # =========================
             # ✅ EXCEL DOWNLOAD
-            # =========================
             excel_output = io.BytesIO()
 
             with pd.ExcelWriter(excel_output, engine='openpyxl') as writer:
@@ -111,16 +88,11 @@ def extractor_ui():
             st.download_button(
                 "📥 Download Excel",
                 data=excel_output.getvalue(),
-                file_name
-=f"{base_name}.xlsx",
- 
-
+                file_name=f"{base_name}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
-            # =========================
             # ✅ WORD DOWNLOAD
-            # =========================
             doc = Document()
 
             doc.add_heading('Account Codes', 0)
@@ -137,13 +109,9 @@ def extractor_ui():
             st.download_button(
                 "📄 Download Word",
                 data=word_output.getvalue(),
-                file_name
-=f"{base_name}.docx",
- 
-xmlformats-officedocument.wordprocessingml.document"
+                file_name=f"{base_name}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
-
-
 
         except Exception as e:
             st.error(f"Error: {e}")
