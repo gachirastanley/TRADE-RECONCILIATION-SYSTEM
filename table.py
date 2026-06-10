@@ -5,6 +5,14 @@ import pandas as pd
 import re
 import io
 from docx import Document
+import os
+
+if uploaded_file is not None:
+
+    st.info("Extracting...")
+
+    # ✅ Get file name without extension
+    base_name = os.path.splitext(uploaded_file.name)[0]
 
 
 def extractor_ui():
