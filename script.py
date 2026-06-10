@@ -169,9 +169,13 @@ def cdc_receipting_ui():
             ]
 
             # REMOVE rows with "broker code" ANYWHERE
-           df = df[
-                 ~df.apply(lambda row: row.astype(str).str.contains("broker code", case=False, na=False).any(), axis=1)
-                ]
+
+            df = df[
+                ~df.apply(
+                    lambda row: row.astype(str).str.lower().str.contains("broker code").any(),
+                    axis=1
+                )
+            ]
 
             # ===============================
             # STEP 5: DROP COLUMNS
