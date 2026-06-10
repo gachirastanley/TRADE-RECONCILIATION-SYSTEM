@@ -5,6 +5,8 @@ import json
 from datetime import datetime
 from io import BytesIO
 from table import extractor_ui
+
+
 from script import cdc_receipting_ui
 from login import login_user, register_user
 
@@ -311,7 +313,7 @@ if st.sidebar.button("Extractor"):
 st.sidebar.divider()
 
 # push down
-st.sidebar.markdown("<br>" * 19, unsafe_allow_html=True)
+st.sidebar.markdown("<br>" * 22, unsafe_allow_html=True)
 
 if st.sidebar.button("Logout"):
     st.session_state.logged_in = False
