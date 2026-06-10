@@ -96,13 +96,16 @@ def extractor_ui():
             excel_output = io.BytesIO()
 
             with pd.ExcelWriter(excel_output, engine='openpyxl') as writer:
-                df_accounts.to_excel(writer, sheet_name="Accounts", index=False)
-                df_shares.to_excel(writer, sheet_name="Shares", index=False)
+                df_accounts.to_excel(writer, sheet_name="Account Codes", index=False)
+                df_shares.to_excel(writer, sheet_name="Share Codes", index=False)
 
             st.download_button(
                 "📥 Download Excel",
                 data=excel_output.getvalue(),
-                file_name="codes.xlsx",
+                file_name
+=f"{base_name}.xlsx",
+ 
+
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
@@ -125,8 +128,10 @@ def extractor_ui():
             st.download_button(
                 "📄 Download Word",
                 data=word_output.getvalue(),
-                file_name="codes.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                file_name
+=f"{base_name}.docx",
+ 
+xmlformats-officedocument.wordprocessingml.document"
             )
 
 
