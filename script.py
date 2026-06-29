@@ -112,6 +112,23 @@ def norm_name(val):
 # CDC RECEIPTING UI
 # =====================================================
 def cdc_receipting_ui():
+
+    # ✅ Header with refresh
+    col1, col2 = st.columns([9, 1])
+
+    with col2:
+        if st.button("🔄", key="cdc_refresh"):
+
+            # ✅ KEEP LOGIN ONLY
+            keep_keys = ["logged_in", "username"]
+
+            # ✅ CLEAR EVERYTHING ELSE
+            for key in list(st.session_state.keys()):
+                if key not in keep_keys:
+                    del st.session_state[key]
+
+            st.rerun()
+
     st.subheader("Start CDC Reconciliation")
 
     pdf = st.file_uploader("Upload Consolidated Trades PDF", type=["pdf"], key="cdc")
