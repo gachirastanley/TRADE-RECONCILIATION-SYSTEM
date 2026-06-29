@@ -6,6 +6,11 @@ from datetime import datetime
 from io import BytesIO
 from table import extractor_ui
 
+from openpyxl.styles import Font
+from docx import Document
+from docx.shared import Pt
+
+
 
 from script import cdc_receipting_ui
 from login import login_user, register_user
@@ -24,9 +29,6 @@ os.makedirs(HISTORY_FOLDER, exist_ok=True)
 # =====================================================
 # GLOBAL STYLES
 # =====================================================
-
-
-
 
 
 def apply_styles():
@@ -174,11 +176,6 @@ def save_history(data):
 # =====================================================
 # UTILITY HELPERS
 # =====================================================
-# =====================================================
-# VOICE COMMAND FUNCTION
-# =====================================================
-
-
 def display_table_with_commas(df: pd.DataFrame, hide_index=False, hide_columns=False):
     styled = df.style.format(precision=2, thousands=",")
     styled = styled.apply(
@@ -245,6 +242,7 @@ st.session_state.setdefault("show_final_summary", False)
 st.session_state.setdefault("show_history", False)
 st.session_state.setdefault("reconciled", False)
 st.session_state.setdefault("show_extractor", False)
+st.session_state.setdefault("show_audit", False)
 
 # =====================================================
 # LOGIN / REGISTER PAGE
@@ -265,8 +263,6 @@ if not st.session_state.logged_in:
     mode = st.toggle("Switch to Register")
 
     choice = "Register" if mode else "Login"
-
-
 
     if choice == "Login":
         st.subheader("Login")
@@ -311,6 +307,10 @@ if st.sidebar.button("Extractor"):
     st.session_state.show_history = False
 
 st.sidebar.divider()
+if st.sidebar.button("Audit Trail"):
+    st.session_state.show_audit = True
+    st.session_state.show_history = False
+    st.session_state.show_extractor = False
 
 # push down
 st.sidebar.markdown("<br>" * 22, unsafe_allow_html=True)
@@ -319,7 +319,6 @@ if st.sidebar.button("Logout"):
     st.session_state.logged_in = False
     st.session_state.username = ""
     st.rerun()
-
 
 
 # =====================================================
@@ -379,7 +378,657 @@ if st.session_state.show_history:
 
     st.stop()
 
+# =====================================================
+# AUDIT TRAIL PAGE
+# =====================================================
+if st.session_state.show_audit:
 
+    st.title("🧾 Audit Trail")
+
+    uploaded_file = st.file_uploader(
+        "Upload Bank Statement File",
+        type=["xlsx", "xls"]
+    )
+
+    if uploaded_file:
+
+        import pandas as pd
+        from openpyxl import load_workbook
+        from io import BytesIO
+
+        file_name = uploaded_file.name.lower()
+
+        # =====================================================
+        # ✅ 1. HANDLE FILE
+        # =====================================================
+        if file_name.endswith("xlsx"):
+            wb = load_workbook(uploaded_file, data_only=True)
+
+        elif file_name.endswith("xls"):
+
+            st.info("🔄 Converting .xls to .xlsx...")
+
+            try:
+                df_temp = pd.read_excel(uploaded_file, engine="xlrd", header=None)
+            except Exception:
+                st.error("❌ Convert file to .xlsx and upload again.")
+                st.stop()
+
+            buffer = BytesIO()
+            df_temp.to_excel(buffer, index=False, header=False)
+            buffer.seek(0)
+
+            wb = load_workbook(buffer, data_only=True)
+
+        else:
+            st.error("Unsupported file format")
+            st.stop()
+
+        ws = wb.active
+
+        # =====================================================
+        # ✅ 2. UNMERGE CELLS
+        # =====================================================
+        merged_ranges = list(ws.merged_cells.ranges)
+
+        for merged in merged_ranges:
+            min_row, min_col, max_row, max_col = merged.bounds
+            value = ws.cell(row=min_row, column=min_col).value
+
+            ws.unmerge_cells(str(merged))
+
+            for r in range(min_row, max_row + 1):
+                for c in range(min_col, max_col + 1):
+                    ws.cell(row=r, column=c, value=value)
+
+        # =====================================================
+        # ✅ 3. CONVERT TO DATAFRAME
+        # =====================================================
+        df = pd.DataFrame(ws.values)
+
+        # =====================================================
+        # ✅ 4. SET ROW 13 AS HEADER
+        # =====================================================
+        header_row_index = 12
+
+        if len(df) <= header_row_index:
+            st.error("❌ Row 13 not found")
+            st.stop()
+
+        raw_headers = df.iloc[header_row_index]
+
+        # ✅ MAKE UNIQUE HEADERS
+        clean_headers = []
+        seen = {}
+
+        for h in raw_headers:
+            name = str(h).strip() if pd.notna(h) else "EMPTY"
+
+            if name in seen:
+                seen[name] += 1
+                name = f"{name}_{seen[name]}"
+            else:
+                seen[name] = 0
+
+            clean_headers.append(name)
+
+        df.columns = clean_headers
+        df = df.iloc[header_row_index + 1:].reset_index(drop=True)
+
+        # =====================================================
+        # ✅ 5. FILTER DATA (FBC + INTERNET TRANSFERS)
+        # =====================================================
+
+        if len(df.columns) > 12:  # ensure enough columns
+
+            col_k = df.columns[10]  # Column K
+            col_b = df.columns[1]   # Column B
+            col_m = df.columns[12]  # Column M
+
+            cond_fbc = (
+                df[col_k]
+                .astype(str)
+                .str.replace(r"\s+", " ", regex=True)  # normalize spaces
+                .str.strip()
+                .str.upper()
+                .eq("FBC SECURITIES")
+            )
+
+            # ✅ Condition 2: INTERNET FUNDS TRANSFERS
+            cond_internet = (
+                    df[col_b]
+                    .astype(str)
+                    .str.upper()
+                    .str.contains("INTERNET FUNDS TRSF BTWN ACCS", na=False)
+                    &
+                    df[col_m].notna()
+            )
+
+            # ✅ COMBINE CONDITIONS
+            filtered_df = df[cond_fbc | cond_internet]
+
+        else:
+            st.error("❌ Required columns (B, K, M) not found")
+            st.stop()
+        # =====================================================
+        # ✅ 6. FINAL CLEANING (KEY PART ✅)
+        # =====================================================
+
+        # ✅ Remove unwanted columns
+        filtered_df = filtered_df.drop(
+            columns=[
+                c for c in filtered_df.columns
+                if str(c).strip().lower() in ["deposit", "branch", "debit"]
+            ],
+            errors="ignore"
+        )
+
+        # ✅ Remove columns that are completely empty (NaN)
+        filtered_df = filtered_df.dropna(axis=1, how='all')
+
+        # ✅ Remove columns with only blank strings
+        filtered_df = filtered_df.loc[:, ~(
+            filtered_df.astype(str)
+            .apply(lambda col: col.str.strip().eq("").all())
+        )]
+
+        # ✅ Remove columns with only "None"
+        filtered_df = filtered_df.loc[:, ~(
+            filtered_df.astype(str)
+            .apply(lambda col: col.str.upper().eq("NONE").all())
+        )]
+        # =====================================================
+        # ✅ 6.6 REMOVE LAST COLUMN
+        # =====================================================
+        if filtered_df.shape[1] > 0:
+            filtered_df = filtered_df.iloc[:, :-1]
+        # =====================================================
+        # ✅ 6.5 FORMAT 'Trn Dt' AS DATE ONLY
+        # =====================================================
+
+        # find the column safely
+        trn_col = next(
+            (c for c in filtered_df.columns if "trn" in str(c).lower() and "dt" in str(c).lower()),
+            None
+        )
+
+        if trn_col:
+            filtered_df[trn_col] = pd.to_datetime(
+                filtered_df[trn_col],
+                errors="coerce"
+            ).dt.date
+        else:
+            st.warning("⚠️ 'Trn Dt' column not found")
+
+        # =====================================================
+        # ✅ 7. DISPLAY
+        # =====================================================
+        st.success("✅ Bank Statement Data Processed Successfully")
+
+        st.subheader("Bank Statement Data")
+        st.dataframe(filtered_df, use_container_width=True)
+
+        # ✅ Persist immediately so later sections (export, audit) never hit
+        # a NameError if this block hasn't re-run on a given rerun.
+        st.session_state.filtered_df = filtered_df
+
+    # =====================================================
+    # ✅ 8. UPLOAD & CLEAN SECOND FILE
+    # =====================================================
+    st.divider()
+
+    second_file = st.file_uploader(
+        "Upload FBC Bank Settlement file",
+        type=["xlsx", "xls"],
+        key="second_file"
+    )
+
+    if second_file:
+
+        import pandas as pd
+
+        try:
+            # Load raw (no headers)
+            second_df = pd.read_excel(second_file, header=None, engine="openpyxl")
+        except Exception:
+            try:
+                second_df = pd.read_excel(second_file, header=None, engine="xlrd")
+            except Exception:
+                st.error("❌ Unable to read second file")
+                st.stop()
+
+        # =====================================================
+        # ✅ 1. SET ROW 20 AS HEADER (index 19)
+        # =====================================================
+        header_row_index = 19
+
+        if len(second_df) <= header_row_index:
+            st.error("❌ Row 20 not found in file")
+            st.stop()
+
+        raw_headers = second_df.iloc[header_row_index]
+
+        # ✅ Clean + make unique headers
+        clean_headers = []
+        seen = {}
+
+        for h in raw_headers:
+            name = str(h).strip() if pd.notna(h) else "EMPTY"
+
+            if name in seen:
+                seen[name] += 1
+                name = f"{name}_{seen[name]}"
+            else:
+                seen[name] = 0
+
+            clean_headers.append(name)
+
+        second_df.columns = clean_headers
+
+        # remove header rows above
+        second_df = second_df.iloc[header_row_index + 1:].reset_index(drop=True)
+
+        # =====================================================
+        # ✅ 2. REMOVE EMPTY ROWS
+        # =====================================================
+        second_df = second_df.dropna(how="all")
+
+        # remove rows where everything is blank string
+        second_df = second_df[
+            ~second_df.astype(str)
+            .apply(lambda row: row.str.strip().eq("").all(), axis=1)
+        ]
+
+        # =====================================================
+        # ✅ 3. REMOVE EMPTY COLUMNS
+        # =====================================================
+        second_df = second_df.loc[:, second_df.columns.notna()]
+        second_df = second_df.loc[:, second_df.columns != "EMPTY"]
+
+        # remove columns with all NaN
+        second_df = second_df.dropna(axis=1, how="all")
+
+        # remove columns with all blank strings
+        second_df = second_df.loc[:, ~(
+            second_df.astype(str)
+            .apply(lambda col: col.str.strip().eq("").all())
+        )]
+
+        # remove columns with only "None"
+        second_df = second_df.loc[:, ~(
+            second_df.astype(str)
+            .apply(lambda col: col.str.upper().eq("NONE").all())
+        )]
+        # =====================================================
+        # ✅ 4. RENAME FIRST COLUMN TO "Date"
+        # =====================================================
+        if len(second_df.columns) > 0:
+            cols = list(second_df.columns)
+            cols[0] = "Date"
+            second_df.columns = cols
+        # =====================================================
+        # ✅ 6. STANDARDIZE COLUMN NAMES
+        # =====================================================
+
+        expected_cols = ["Date", "Ref", "Type", "Details", "Debit", "Credit", "Balance"]
+
+        # Trim or adjust based on available columns
+        current_cols = list(second_df.columns)
+
+        # If more columns exist → trim
+        if len(current_cols) >= len(expected_cols):
+            second_df = second_df.iloc[:, :len(expected_cols)]
+            second_df.columns = expected_cols
+
+        # If fewer columns exist → assign what is possible
+        else:
+            second_df.columns = expected_cols[:len(current_cols)]
+
+        # =====================================================
+        # ✅ 5. FINAL CLEAN OUTPUT
+        # =====================================================
+        st.success("✅ FBC Settlement data cleaned successfully")
+
+        st.subheader("FBC Bank Settlement Data")
+        st.dataframe(second_df, use_container_width=True)
+
+        # store for later use
+        st.session_state.second_df = second_df
+
+    # =====================================================
+    # ✅ 9. AUDIT TRAIL (FINAL CLEAN VERSION ✅)
+    # =====================================================
+    st.divider()
+
+    if st.button("Audit Trail"):
+
+        # Pull source frames from session_state so this works even if the
+        # uploader blocks above didn't re-run this cycle.
+        filtered_df = st.session_state.get("filtered_df")
+        second_df = st.session_state.get("second_df")
+
+        if filtered_df is None or second_df is None:
+            st.error("❌ Please upload both the Bank Statement and the FBC Settlement file first.")
+            st.stop()
+
+        st.subheader("🔍 Full Reconciliation Results")
+
+        # =====================================================
+        # ✅ 1. GET REQUIRED COLUMNS
+        # =====================================================
+        bank_credit_col = next(
+            (c for c in filtered_df.columns if "credit" in str(c).lower()),
+            None
+        )
+
+        bank_date_col = next(
+            (c for c in filtered_df.columns if "trn" in str(c).lower()),
+            None
+        )
+
+        if bank_credit_col is None:
+            st.error("❌ Bank credit column not found")
+            st.stop()
+
+        if not all(col in second_df.columns for col in ["Debit", "Credit", "Date"]):
+            st.error("❌ Settlement columns missing")
+            st.stop()
+
+        # =====================================================
+        # ✅ 2. CLEAN NUMERIC DATA
+        # =====================================================
+        filtered_df[bank_credit_col] = pd.to_numeric(
+            filtered_df[bank_credit_col], errors="coerce"
+        )
+
+        second_df["Debit"] = pd.to_numeric(second_df["Debit"], errors="coerce")
+        second_df["Credit"] = pd.to_numeric(second_df["Credit"], errors="coerce")
+
+        # =====================================================
+        # ✅ 3. TRACKING STRUCTURES
+        # =====================================================
+        matched_bank = set()
+        matched_settlement = set()
+        results = []
+
+        # =====================================================
+        # ✅ HELPER FUNCTION
+        # =====================================================
+        def extract_int(val):
+            try:
+                return int(float(val))
+            except Exception:
+                return None
+
+        # =====================================================
+        # ✅ MATCH LOGIC
+        # =====================================================
+        for i in range(len(second_df)):
+
+            debit_val = second_df.iloc[i]["Debit"]
+
+            if pd.isna(debit_val) or debit_val == 0:
+                continue
+
+            debit_int = extract_int(debit_val)
+
+            direct_found = False
+
+            # ✅ STEP 1: DIRECT MATCH
+            for k, bank_row in filtered_df.iterrows():
+
+                bank_val = bank_row[bank_credit_col]
+                bank_int = extract_int(bank_val)
+
+                if debit_int == bank_int:
+                    matched_bank.add(k)
+                    matched_settlement.add(i)
+
+                    results.append({
+                        "Date": bank_row[bank_date_col] if bank_date_col else "",
+                        "Bank Credit": bank_val,
+                        "Calculated": debit_val,
+                        "Settlement Debit": debit_val,
+                        "Settlement Credit": "",
+                        "Match Type": "DIRECT",
+                        "Result": "RECEIPTED ✅"
+                    })
+
+                    direct_found = True
+
+            if direct_found:
+                continue
+
+            # ✅ STEP 2: CALCULATED MATCH
+            for j in range(len(second_df)):
+
+                credit_val = second_df.iloc[j]["Credit"]
+
+                if pd.isna(credit_val) or credit_val == 0:
+                    continue
+
+                calculated = round(debit_val - credit_val, 2)
+                calc_int = extract_int(calculated)
+
+                for k, bank_row in filtered_df.iterrows():
+
+                    if k in matched_bank:
+                        continue
+
+                    bank_val = bank_row[bank_credit_col]
+                    bank_int = extract_int(bank_val)
+
+                    if calc_int == bank_int:
+                        matched_bank.add(k)
+                        matched_settlement.add(i)
+                        matched_settlement.add(j)
+
+                        results.append({
+                            "Date": bank_row[bank_date_col] if bank_date_col else "",
+                            "Bank Credit": bank_val,
+                            "Calculated": calculated,
+                            "Settlement Debit": debit_val,
+                            "Settlement Credit": credit_val,
+                            "Match Type": "CALCULATED",
+                            "Result": "RECEIPTED ✅"
+                        })
+
+        # =====================================================
+        # ✅ 5. UNMATCHED BANK
+        # =====================================================
+        unmatched_bank = filtered_df.drop(index=list(matched_bank), errors="ignore")
+
+        for _, row in unmatched_bank.iterrows():
+            results.append({
+                "Date": row[bank_date_col] if bank_date_col else "",
+                "Bank Credit": row[bank_credit_col],
+                "Settlement Debit": "",
+                "Settlement Credit": "",
+                "Match Type": "",
+                "Result": "NOT RECEIPTED ❌"
+            })
+
+        # =====================================================
+        # ✅ 6. UNMATCHED SETTLEMENT
+        # =====================================================
+        for idx, row in second_df.iterrows():
+            if idx not in matched_settlement:
+
+                if pd.notna(row["Debit"]) or pd.notna(row["Credit"]):
+                    results.append({
+                        "Date": row["Date"],
+                        "Bank Credit": "",
+                        "Settlement Debit": row["Debit"],
+                        "Settlement Credit": row["Credit"],
+                        "Match Type": "",
+                        "Result": "NOT RECEIPTED ❌"
+                    })
+
+        # =====================================================
+        # ✅ CLEAN DUPLICATES / CONFLICTS (FIXED)
+        # =====================================================
+        result_df = pd.DataFrame(results)
+
+        RECEIPTED = "RECEIPTED ✅"
+        NOT_RECEIPTED = "NOT RECEIPTED ❌"
+
+        is_receipted = result_df["Result"] == RECEIPTED
+        is_not_receipted = result_df["Result"] == NOT_RECEIPTED
+
+        # ✅ Remove NOT-RECEIPTED bank rows whose value was actually matched elsewhere
+        receipted_values = set(
+            pd.to_numeric(result_df.loc[is_receipted, "Bank Credit"], errors="coerce").dropna()
+        )
+
+        result_df = result_df[
+            ~(
+                    is_not_receipted &
+                    pd.to_numeric(result_df["Bank Credit"], errors="coerce").isin(receipted_values)
+            )
+        ]
+
+        # refresh boolean masks after filtering
+        is_receipted = result_df["Result"] == RECEIPTED
+        is_not_receipted = result_df["Result"] == NOT_RECEIPTED
+
+        # ✅ Remove NOT-RECEIPTED settlement rows whose debit was actually matched elsewhere
+        receipted_debits = set(
+            pd.to_numeric(result_df.loc[is_receipted, "Settlement Debit"], errors="coerce").dropna()
+        )
+
+        result_df = result_df[
+            ~(
+                    is_not_receipted &
+                    pd.to_numeric(result_df["Settlement Debit"], errors="coerce").isin(receipted_debits)
+            )
+        ]
+
+        # ✅ Final clean — keep ALL receipted rows AND all genuinely not-receipted rows
+        # (no trimming/dropping below — every unmatched row in column 2 is preserved)
+        result_df = result_df.drop_duplicates().reset_index(drop=True)
+
+        # ✅ Persist for the export section below
+        st.session_state.result_df = result_df
+        st.session_state.filtered_df = filtered_df
+        st.session_state.second_df = second_df
+
+        # =====================================================
+        # ✅ 7. FINAL OUTPUT
+        # =====================================================
+        st.success("✅ Full Reconciliation Complete")
+
+        st.dataframe(result_df, use_container_width=True)
+
+        # =====================================================
+        # ✅ SUMMARY
+        # =====================================================
+        st.write("### Summary")
+        st.write("✅ RECEIPTED:", (result_df["Result"] == RECEIPTED).sum())
+        st.write("❌ NOT RECEIPTED:", (result_df["Result"] == NOT_RECEIPTED).sum())
+
+    # =====================================================
+    # ✅ EXPORT SECTION (only shown once an audit result exists)
+    # =====================================================
+    if (
+        "result_df" in st.session_state
+        and "filtered_df" in st.session_state
+        and "second_df" in st.session_state
+    ):
+
+        def export_to_excel():
+            result_df_local = st.session_state.result_df
+            filtered_df_local = st.session_state.filtered_df
+            second_df_local = st.session_state.second_df
+
+            output = BytesIO()
+
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+
+                filtered_df_local.to_excel(writer, sheet_name="Bank Data", index=False)
+                second_df_local.to_excel(writer, sheet_name="Settlement Data", index=False)
+                result_df_local.to_excel(writer, sheet_name="Audit Result", index=False)
+
+                for ws in writer.book.worksheets:
+                    for row in ws.iter_rows():
+                        for cell in row:
+                            cell.font = Font(name="Times New Roman", size=12)
+
+                    for cell in ws[1]:
+                        if cell.value:
+                            cell.font = Font(name="Times New Roman", size=12, bold=True)
+
+            output.seek(0)
+            return output
+
+        excel_file = export_to_excel()
+
+        st.download_button(
+            label="📥 Download Excel Report",
+            data=excel_file,
+            file_name="Audit_Trail_Report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        # =====================================================
+        # ✅ EXPORT TO WORD
+        # =====================================================
+        def export_to_word():
+            doc = Document()
+
+            style = doc.styles['Normal']
+            style.font.name = "Times New Roman"
+            style.font.size = Pt(12)
+
+            def add_table(df, title):
+                doc.add_heading(title, level=2)
+
+                table = doc.add_table(rows=1, cols=len(df.columns))
+
+                # ✅ Header
+                for i, col in enumerate(df.columns):
+                    cell = table.rows[0].cells[i]
+                    cell.text = str(col)
+                    for p in cell.paragraphs:
+                        for run in p.runs:
+                            run.bold = True
+                            run.font.name = "Times New Roman"
+                            run.font.size = Pt(12)
+
+                # ✅ Data
+                for _, row in df.iterrows():
+                    cells = table.add_row().cells
+                    for i, val in enumerate(row):
+                        cells[i].text = str(val)
+                        for p in cells[i].paragraphs:
+                            for run in p.runs:
+                                run.font.name = "Times New Roman"
+                                run.font.size = Pt(12)
+
+            # ✅ Add all tables (pulled from session_state, always defined here)
+            add_table(st.session_state.filtered_df, "Bank Data")
+            add_table(st.session_state.second_df, "Settlement Data")
+            add_table(st.session_state.result_df, "Audit Results")
+
+            buffer = BytesIO()
+            doc.save(buffer)
+            buffer.seek(0)
+            return buffer
+
+        st.download_button(
+            label="📄 Download Word Report",
+            data=export_to_word(),
+            file_name="Audit_Report.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+
+    # =====================================================
+    # ✅ BACK BUTTON
+    # =====================================================
+    if st.button("⬅ Back"):
+        st.session_state.show_audit = False
+        st.rerun()
+
+    st.stop()
 
 # =====================================================
 # MAIN RECEIPTING UI
@@ -409,8 +1058,22 @@ if receipting_type == "CDC Receipting":
 # ZSE RECEIPTING
 # =====================================================
 import camelot  # noqa: E402 – imported here to avoid loading unless needed
+# Top header with refresh
+col1, col2 = st.columns([9, 1])
 
+with col2:
+    if st.button("🔄"):
+        # Preserve login info
+        keep_keys = ["logged_in", "username"]
+
+        # Clear everything else
+        for key in list(st.session_state.keys()):
+            if key not in keep_keys:
+                del st.session_state[key]
+
+        st.rerun()
 st.subheader("Start ZSE Reconciliation")
+
 
 # ----- ZSE FILE UPLOAD -----
 zse_file = st.file_uploader("Upload ZSE Excel File", type=["xlsx", "xls"])
@@ -534,7 +1197,6 @@ if st.session_state.sorted:
                 zse_clean = zse[~zse[zse_type].isin(["BUY TOTAL", "SELL TOTAL"])].copy()
                 keys = set(zip(zse_clean[zse_sym], zse_clean["_MATCH_"]))
 
-
                 def add_total_block(data, label):
                     total = {}
                     for col in data.columns:
@@ -546,7 +1208,6 @@ if st.session_state.sorted:
                             total[col] = ""
                     total[sh_type] = label
                     return pd.concat([data, pd.DataFrame([total])], ignore_index=True)
-
 
                 matched = sh[sh.apply(lambda r: (r[sh_sym], r[sh_type]) in keys, axis=1)]
                 purchase_df = add_total_block(matched[matched[sh_type] == "PURCHASE"], "PURCHASE TOTAL")
@@ -566,7 +1227,6 @@ if st.session_state.sorted:
                     "vat": ["vat"],
                 }
 
-
                 def append_zse_row(df, zse_row, label):
                     row = {}
                     for sh_col in df.columns:
@@ -581,7 +1241,6 @@ if st.session_state.sorted:
                                         row[sh_col] = zse_row[zc]
                     return pd.concat([df, pd.DataFrame([row])], ignore_index=True)
 
-
                 zse_buy_total = zse[zse[zse_type] == "BUY TOTAL"]
                 zse_sell_total = zse[zse[zse_type] == "SELL TOTAL"]
 
@@ -589,7 +1248,6 @@ if st.session_state.sorted:
                     purchase_df = append_zse_row(purchase_df, zse_buy_total.iloc[0], "ZSE BUY TOTAL")
                 if not zse_sell_total.empty:
                     sale_df = append_zse_row(sale_df, zse_sell_total.iloc[0], "ZSE SELL TOTAL")
-
 
                 def append_variance(df, total_label, zse_label, variance_label):
                     total_rows = df[df[sh_type] == total_label]
@@ -609,7 +1267,6 @@ if st.session_state.sorted:
                         else:
                             row[col] = ""
                     return pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-
 
                 purchase_df = append_variance(
                     purchase_df, "PURCHASE TOTAL", "ZSE BUY TOTAL", "VARIANCE (PURCHASE - ZSE BUY)"
@@ -892,9 +1549,6 @@ if st.session_state.sorted:
                         break
 
                 # Times New Roman 12 across all sheets
-
-
-
                 for ws in writer.book.worksheets:
                     for row in ws.iter_rows():
                         for cell in row:
@@ -909,7 +1563,6 @@ if st.session_state.sorted:
                                 color=existing.color,
                             )
 
-
                 # Auto column widths (all sheets)
                 MAX_WIDTH, MIN_WIDTH, PADDING = 28, 8, 2
                 # ✅ APPLY THOUSANDS FORMAT + ALIGNMENT
@@ -923,7 +1576,7 @@ if st.session_state.sorted:
                             if isinstance(cell.value, str):
                                 try:
                                     cell.value = float(cell.value.replace(",", ""))
-                                except:
+                                except Exception:
                                     pass
 
                             # ✅ Apply thousands separator
@@ -966,7 +1619,7 @@ if st.session_state.sorted:
                     "type": receipting_type,
                     "total": float(post_settlement_total),
                 }
-
+                history.append(new_entry)
 
                 save_history(history)
                 st.success("CDC report saved to history.")
